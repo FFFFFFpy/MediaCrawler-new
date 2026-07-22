@@ -35,8 +35,15 @@ jobs:
         run: |
           python tools/afk_global_snapshot.py \
             --output afk-global-snapshot-2026-07-22 \
-            --workers 4 \
-            --portraits
+            --workers 4
+
+      - name: Reparse saved HTML and download primary images
+        id: reparse
+        continue-on-error: true
+        run: |
+          python tools/afk_reparse_v2.py \
+            afk-global-snapshot-2026-07-22 \
+            --download-primary-images
 
       - name: Print snapshot manifest
         if: always()
@@ -47,6 +54,7 @@ jobs:
         if: always()
         run: |
           cp tools/afk_global_snapshot.py afk-global-snapshot-2026-07-22/afk_global_snapshot.py
+          cp tools/afk_reparse_v2.py afk-global-snapshot-2026-07-22/afk_reparse_v2.py
           zip -q -r afk-global-snapshot-2026-07-22.zip afk-global-snapshot-2026-07-22
           ls -lh afk-global-snapshot-2026-07-22.zip
 
@@ -54,12 +62,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: afk-global-snapshot-2026-07-22
+          name: afk-global-snapshot-2026-07-22-v2
           path: afk-global-snapshot-2026-07-22.zip
           compression-level: 0
           retention-days: 1
           if-no-files-found: error
 
-      - name: Surface crawler failure
-        if: steps.crawl.outcome == 'failure'
+      - name: Surface crawler or parser failure
+        if: steps.crawl.outcome == 'failure' || steps.reparse.outcome == 'failure'
         run: exit 1
