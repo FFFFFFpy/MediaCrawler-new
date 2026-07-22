@@ -1,0 +1,61 @@
+name: Snapshot
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish complete HTML and image archives
+        required: true
+        default: true
+        type: boolean
+  push:
+    branches: [main]
+    paths: ["bootstrap-ready"]
+  schedule:
+    - cron: "17 3 * * 2"
+permissions:
+  contents: write
+concurrency:
+  group: afk-global-snapshot
+  cancel-in-progress: false
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - id: meta
+        shell: bash
+        run: |
+          D="$(date -u +%F)"; echo "date=$D" >> "$GITHUB_OUTPUT"; echo "root=artifacts/afk-global-snapshot-$D" >> "$GITHUB_OUTPUT"; echo "tag=snapshot-${D//-/.}" >> "$GITHUB_OUTPUT"
+      - run: python scripts/afk_global_snapshot.py --output "${{ steps.meta.outputs.root }}" --workers 4
+      - run: python scripts/afk_reparse_v2.py "${{ steps.meta.outputs.root }}"
+      - run: python scripts/download_assets.py "${{ steps.meta.outputs.root }}" --workers 4
+      - run: python scripts/prepare_snapshot.py "${{ steps.meta.outputs.root }}" --current data/current
+      - run: python scripts/validate_snapshot.py data/current
+      - name: Package archives
+        shell: bash
+        run: |
+          D="${{ steps.meta.outputs.date }}"; R="${{ steps.meta.outputs.root }}"; mkdir -p dist
+          zip -qr "dist/afk-global-full-$D.zip" "$R"; zip -qr "dist/afk-global-structured-$D.zip" data/current
+          cp data/current/quality_report.json "dist/quality-report-$D.json"
+          (cd dist && sha256sum "afk-global-full-$D.zip" "afk-global-structured-$D.zip" "quality-report-$D.json" > checksums.sha256)
+      - name: Commit structured data
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"; git add data/current
+          git diff --cached --quiet || (git commit -m "snapshot: ${{ steps.meta.outputs.date }}" && git push)
+      - name: Publish dated Release
+        if: github.event_name != 'workflow_dispatch' || inputs.publish_release
+        env: {GH_TOKEN: "${{ github.token }}"}
+        shell: bash
+        run: |
+          D="${{ steps.meta.outputs.date }}"; T="${{ steps.meta.outputs.tag }}"; F=("dist/afk-global-full-$D.zip" "dist/afk-global-structured-$D.zip" "dist/quality-report-$D.json" "dist/checksums.sha256")
+          printf '# AFK Global snapshot %s\n\nComplete compressed HTML and every downloadable character image referenced by detail pages. Source 404 assets remain recorded as failures.\n' "$D" > dist/notes.md
+          if gh release view "$T" >/dev/null 2>&1; then gh release upload "$T" "${F[@]}" --clobber; gh release edit "$T" --title "AFK Global snapshot $D" --notes-file dist/notes.md; else gh release create "$T" "${F[@]}" --title "AFK Global snapshot $D" --notes-file dist/notes.md; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: "afk-global-snapshot-${{ steps.meta.outputs.date }}", path: "dist/*", compression-level: 0, retention-days: 7}
