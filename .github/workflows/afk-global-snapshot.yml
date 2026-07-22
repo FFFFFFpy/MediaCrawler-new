@@ -1,0 +1,62 @@
+name: Temporary AFK Global Snapshot
+
+on:
+  push:
+    branches:
+      - tmp/afk-global-crawl-20260722
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out temporary branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install crawler dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml
+
+      - name: Crawl list and character detail pages
+        id: crawl
+        continue-on-error: true
+        run: |
+          python tools/afk_global_snapshot.py \
+            --output afk-global-snapshot-2026-07-22 \
+            --workers 4 \
+            --portraits
+
+      - name: Print snapshot manifest
+        if: always()
+        run: |
+          test -f afk-global-snapshot-2026-07-22/manifest.json && cat afk-global-snapshot-2026-07-22/manifest.json || true
+
+      - name: Package snapshot
+        if: always()
+        run: |
+          cp tools/afk_global_snapshot.py afk-global-snapshot-2026-07-22/afk_global_snapshot.py
+          zip -q -r afk-global-snapshot-2026-07-22.zip afk-global-snapshot-2026-07-22
+          ls -lh afk-global-snapshot-2026-07-22.zip
+
+      - name: Upload snapshot artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: afk-global-snapshot-2026-07-22
+          path: afk-global-snapshot-2026-07-22.zip
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Surface crawler failure
+        if: steps.crawl.outcome == 'failure'
+        run: exit 1
